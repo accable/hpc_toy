@@ -63,7 +63,7 @@ double hte(const nvpl_int_t steps){
 	}
 	
 	// Computing timesteps
-	for (nvpl_int_t = 0; i < steps; i++){
+	for (nvpl_int_t i = 0; i < steps; i++){
 		for (nvpl_int_t j = 0; j < domain_interval; j++){
 			for (nvpl_int_t k = 0; k < domain_interval; k++){
 				double left_temp, right_temp, top_temp, bottom_temp;
@@ -105,7 +105,7 @@ double hte(const nvpl_int_t steps){
 				new_temperature_map[j * domain_interval + k] = temperature_map[j * domain_interval + k] + total_derivative * rate_of_change;
 			}
 		}
-s
+
 		double *temp = temperature_map;
 		temperature_map = new_temperature_map;
 		new_temperature_map = temp;
