@@ -110,7 +110,7 @@ double hte(const nvpl_int_t steps){
 		// LAPACK operations
 		LAPACKE_sgesv(LAPACK_ROW_MAJOR, world_size, 1, new_temperature_map, world_size, ipiv, temperature_map_rhs, 1);
 
-		double *temp = temperature_map;
+		float *temp = temperature_map;
 		temperature_map = temperature_map_rhs;
 		temperature_map_rhs = temp;
 
