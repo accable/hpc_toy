@@ -43,21 +43,21 @@ double hte(const nvpl_int_t steps){
 	const double r = alpha_squared / (delta_x * delta_x);
 
 	// Dynamic memory for matrices and LAPACK indices
-	double * temperature_map = NULL;
-	double * temperature_map_rhs = NULL;  	// rhs
-	double * new_temperature_map = NULL;
+	float * temperature_map = NULL;
+	float * temperature_map_rhs = NULL;  	// rhs
+	float * new_temperature_map = NULL;
 	nvpl_int_t * ipiv = NULL;  				// lapack indices
 
 	// Dynamic memory allocation
-	temperature_map = (double *)malloc(world_size * sizeof(double));
-	temperature_map_rhs = (double *)malloc(world_size * sizeof(double));  
-	new_temperature_map = (double *)malloc(world_size * world_size * sizeof(double));  // double the domain_interval since lapack
+	temperature_map = (float *)malloc(world_size * sizeof(float));
+	temperature_map_rhs = (float *)malloc(world_size * sizeof(float));  
+	new_temperature_map = (float *)malloc(world_size * world_size * sizeof(float));  // double the domain_interval since lapack
 	ipiv = (nvpl_int_t *)malloc(world_size * sizeof(nvpl_int_t));  // lapack indices
 
 	// Defining the temperature map
-	const int hotspot_array_length = domain_interval * (hotspot_length / domain_length);  // Assigning the "hot" area
-	const int hotspot_lower_bound = (domain_interval / 2) - (hotspot_array_length / 2);  // The "not hot" area
-	const int hotspot_upper_bound = (domain_interval / 2) + (hotspot_array_length / 2);  // Ditto
+	const nvpl_int_t hotspot_array_length = domain_interval * (hotspot_length / domain_length);  // Assigning the "hot" area
+	const nvpl_int_t hotspot_lower_bound = (domain_interval / 2) - (hotspot_array_length / 2);  // The "not hot" area
+	const nvpl_int_t hotspot_upper_bound = (domain_interval / 2) + (hotspot_array_length / 2);  // Ditto
 
 	// Row major, because C
 	for (nvpl_int_t i = 0; i < domain_interval; i++){ 
