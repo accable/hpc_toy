@@ -30,7 +30,7 @@ double hte(const nvpl_int_t steps){
 	// World variables 
 	// Please do not change anything
 	const nvpl_int_t domain_length = 1;  
-	const nvpl_int64_t domain_interval = 500;  
+	const nvpl_int64_t domain_interval = 50;  
 	const double hotspot_length = 0.4;  
 	
 	// You can change this one tho...
