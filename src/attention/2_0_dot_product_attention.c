@@ -83,7 +83,7 @@ int main()
     enum { nmodeK = 4 };
     enum { nmodeS = 4 };
 
-    int64_t extent[] = {1, 1, 128, 64, 128};  // [B, H, len, D, len]
+    int64_t extent[] = {8, 12, 512, 64, 512};  // [B, H, len, D, len], following BERT-base size
 
     int64_t extentQ[nmodeQ];
     for (int i = 0; i < nmodeQ; ++i)
@@ -103,22 +103,25 @@ int main()
 
     /**********************
      * Allocating data
+     * 
+     * We also fixed a bug (more like oversight) from the sample code that would cause the calculation to overflow at 
+     * scale (large values)
      **********************/
 
     int64_t elementsQ = 1;
     for (int i = 0; i < nmodeQ; ++i)
     {
-        elementsQ *= extent[i];
+        elementsQ *= extentQ[i];
     }
     int64_t elementsK = 1;
     for (int i = 0; i < nmodeK; ++i)
     {
-        elementsK *= extent[i];
+        elementsK *= extentK[i];
     }
     int64_t elementsS = 1;
     for (int i = 0; i < nmodeS; ++i)
     {
-        elementsS *= extent[i];
+        elementsS *= extentS[i];
     }
 
     int64_t sizeQ = sizeof(floatTypeQ) * elementsQ;
@@ -277,7 +280,7 @@ int main()
         free(work);
 
     // Calculating flops and outputting values
-    int64_t flops_qk = 2LL * 1 * 1 * 128 * 128 * 64;
+    int64_t flops_qk = 2LL * extent[0] * extent[1] * extent[2] * extent[3] * extent[4];
     double gflops = (double)flops_qk / 1e9 / elapsed_time;
 
     printf("Simulation finished in: %f\n", elapsed_time);
