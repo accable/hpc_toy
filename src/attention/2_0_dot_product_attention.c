@@ -12,6 +12,17 @@
 #include <string.h>
 #include <nvpl_tensor.h>
 
+// Since the cluster does not have perf or gperf, we need to do this the old fashioned way
+#include <time.h>
+
+// Memory profiling functions
+long get_peak_memory_kb(){
+	
+	struct rusage usage;
+	getrusage(RUSAGE_SELF, &usage);
+	return usage.ru_maxrss;
+}
+
 #define HANDLE_ERROR(x)                                           \
     {                                                             \
         const nvpltensorStatus_t err = x;                         \
@@ -24,6 +35,12 @@
 
 int main()
 {
+
+    // Timekeeping purposes
+    // Begin timer
+	double time_start;
+	time_start = clock();
+
     typedef float floatTypeQ;  // Query
     typedef float floatTypeK;  // Key
     typedef float floatTypeS;  // Attention Kernel
@@ -234,6 +251,11 @@ int main()
 
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, Q, K, (void*) &beta, S, S, work, actualWorkspaceSize));
+    
+    // End timer
+	double elapsed_time;
+	elapsed_time = (clock() - time_start)/CLOCKS_PER_SEC;
+    long peak_mem = get_peak_memory_kb();  // Memory measurement
 
     /*************************/
 
@@ -252,5 +274,13 @@ int main()
         free(S);
     if (work)
         free(work);
+
+    // Calculating flops and outputting values
+    int64_t flops_qk = 2LL * 1 * 1 * 128 * 128 * 64;
+    double gflops = (double)flops_qk / 1e9 / elapsed_time;
+
+    printf("Simulation finished in: %f\n", elapsed_time);
+    printf("Performance: %.2f GFLOPs\n", gflops);   
+	printf("Peak memory usage: %ld KB (%.2f MB)\n", peak_mem, peak_mem / 1024.0);
     return 0;
 }
