@@ -1,7 +1,11 @@
 /* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_tensor/contraction/contraction.c and 
-* and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. 
+* and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. This however, is not 
+* considered as a "correct" implementation of Attention, as this was more of an experimentation rather than "actually 
+* coding Attention". Since cuTENSOR is not made for our purposes, we only present the "largest configuration you can run 
+* without cuTENSOR whining and throwing fit" configuration. 
 * 
-*
+* Segmentation fault problem when assigning large sized extents from the original code has been fixed in this code.
+* 
 * Since scaled dot product Attention requires Q, K^t, and V values, we need to also declare the intermediate values too
 * (i.e., S = Q * K^t, the attention kernel), and the output O.
 */
@@ -24,6 +28,39 @@ long get_peak_memory_kb(){
 	return usage.ru_maxrss;
 }
 
+
+void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
+    for(int b = 0; b < B; ++b){
+        for(int h = 0; h < H; ++h){
+            for(int q = 0; q < Q; ++q){
+                
+                // Get the pointer (we assume everything is 1D now)
+                float* s_ptr = S + (((b * H + h) * Q + q) * K);
+
+                // Get max
+                float max_val = s_ptr[0];
+                for (int k = 1; k < K, ++k){
+                    if (s_ptr[k] > max_val) max_val = s_ptr[k];
+                }
+
+                // Get exponents and sum
+                float sum = 0.0f;
+                for (int k = 0; k < K, ++k){
+                    s_ptr[k] = expf(s_ptr[k] - max_val);
+                    sum += s_ptr[k];
+                }
+
+                // Normalize
+                for (int k = 0; k < K, ++k){
+                    s_ptr[k] /= sum;
+                }
+            }
+        }
+    }
+}
+
+
+// START!
 #define HANDLE_ERROR(x)                                           \
     {                                                             \
         const nvpltensorStatus_t err = x;                         \
@@ -34,10 +71,10 @@ long get_peak_memory_kb(){
         }                                                         \
     };
 
+
 int main()
 {
 
-    // Timekeeping purposes
     // Begin timer
 	double time_start;
 	time_start = clock();
@@ -69,21 +106,32 @@ int main()
      * K[B, H, D, K_len] (transposed because matmul)
      * S[B, H, Q_len, K_len] (stores Q and K^t matmul result)
      * V[B, H, V_len, D]
-     * O[B, H, O_len, D] (output)s
+     * O[B, O_len, D] (output)
      **********************/
 
     floatTypeCompute alpha = (floatTypeCompute) 1.0f;  // We set it to 1.0f
-    floatTypeCompute beta = (floatTypeCompute) 0.f;  // Is 0.0f so C won't be used
+    floatTypeCompute beta = (floatTypeCompute) 0.0f;  // Is 0.0f so C won't be used
 
     int32_t modeQ[] = {0, 1, 2, 3};  // Q[B, H, Q_len, D]
     int32_t modeK[] = {0, 1, 3, 4};  // K[B, H, D, K_len]
     int32_t modeS[] = {0, 1, 2, 4};  // S[B, H, Q_len, K_len]
+    int32_t modeV[] = {0, 1, 2, 3};  // V[B, H, O_len, D]  (the same as the query because self-attention)
+    int32_t modeO[] = {0, 1, 2, 3};  // O[B, H, len, D]  (should follow the original input size with later flattened (H * D))
 
     enum { nmodeQ = 4 };
     enum { nmodeK = 4 };
     enum { nmodeS = 4 };
+    enum { nmodeV = 4 };
+    enum { nmodeO = 3 };
 
-    int64_t extent[] = {8, 12, 512, 64, 512};  // [B, H, len, D, len], following BERT-base size
+    /* Since this is using cuTENSOR and with how things were designed, this is the maximum size we can use before
+    * cuTENSOR complaining that it cannot do the operation.
+    *
+    * Current assumption is D is 64 and since at the end it would be flattened (H * D), we assume dimension is 64,
+    * head is 8, and the "on tensor" dimension being 8.
+    */
+
+    int64_t extent[] = {1, 8, 512, 8, 512};  // [B, H, len, D, len]
 
     int64_t extentQ[nmodeQ];
     for (int i = 0; i < nmodeQ; ++i)
@@ -99,6 +147,16 @@ int main()
     for (int i = 0; i < nmodeS; ++i)
     {
         extentS[i] = extent[modeS[i]];
+    }
+    int64_t extentV[nmodeV];
+    for (int i = 0; i < nmodeV; ++i)
+    {
+        extentV[i] = extent[modeV[i]];
+    }
+    int64_t extentO[nmodeO];
+    for (int i = 0; i < nmodeO; ++i)
+    {
+        extentO[i] = extent[modeO[i]];
     }
 
     /**********************
@@ -123,18 +181,32 @@ int main()
     {
         elementsS *= extentS[i];
     }
+    int64_t elementsV = 1;
+    for (int i = 0; i < nmodeV; ++i)
+    {
+        elementsV *= extentV[i];
+    }
+    int64_t elementsO = 1;
+    for (int i = 0; i < nmodeO; ++i)
+    {
+        elementsO *= extentO[i];
+    }
 
     int64_t sizeQ = sizeof(floatTypeQ) * elementsQ;
     int64_t sizeK = sizeof(floatTypeK) * elementsK;
     int64_t sizeS = sizeof(floatTypeS) * elementsS;
+    int64_t sizeV = sizeof(floatTypeV) * elementsV;
+    int64_t sizeO = sizeof(floatTypeO) * elementsO;
 
     uint32_t const kAlignment = 128;  // Alignment of the pointers (bytes)
 
     floatTypeQ* Q = aligned_alloc(kAlignment, sizeQ);
     floatTypeK* K = aligned_alloc(kAlignment, sizeK);
     floatTypeS* S = aligned_alloc(kAlignment, sizeS);
+    floatTypeV* V = aligned_alloc(kAlignment, sizeS);
+    floatTypeO* O = aligned_alloc(kAlignment, sizeS);
 
-    if (Q == NULL || K == NULL || S == NULL)
+    if (Q == NULL || K == NULL || V == NULL)  // We only care about Q, K, and V since S and O can be empty for all we care
     {
         printf("Error: allocation of tensor memory.\n");
         return -1;
@@ -142,15 +214,19 @@ int main()
 
     /*******************
      * Initialize data
+     * 
+     * Obviously we only initialize Q, K, and V and not S and O
      *******************/
 
     for (int64_t i = 0; i < elementsQ; i++)
         Q[i] = (((floatTypeQ) (rand() / RAND_MAX)) - 0.5) * 100;
     for (int64_t i = 0; i < elementsK; i++)
         K[i] = (((floatTypeK) (rand() / RAND_MAX)) - 0.5) * 100;
+    for (int64_t i = 0; i < elementsV; i++)
+        V[i] = (((floatTypeV) (rand() / RAND_MAX)) - 0.5) * 100;
     
-    memset(S, 0, sizeof(floatTypeS) * elementsS);  // We keep it 0 since this is used to keep values of Q * K^t
-
+    memset(S, 0, sizeof(floatTypeS) * elementsS);  
+    memset(O, 0, sizeof(floatTypeS) * elementsO);  
 
 
 
@@ -185,6 +261,14 @@ int main()
     nvpltensorTensorDescriptor_t descS;
     HANDLE_ERROR(nvpltensorCreateTensorDescriptor(handle, &descS, nmodeS, extentS, NULL, /*stride*/
                                                   typeS, kAlignment));
+
+    nvpltensorTensorDescriptor_t descV;
+    HANDLE_ERROR(nvpltensorCreateTensorDescriptor(handle, &descV, nmodeV, extentV, NULL, /*stride*/
+                                                  typeV, kAlignment));
+
+    nvpltensorTensorDescriptor_t descO;
+    HANDLE_ERROR(nvpltensorCreateTensorDescriptor(handle, &descO, nmodeO, extentO, NULL, /*stride*/
+                                                  typeO, kAlignment));                                              
 
     /*******************************
      * Create Contraction Descriptor
@@ -256,6 +340,9 @@ int main()
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, Q, K, (void*) &beta, S, S, work, actualWorkspaceSize));
     
+    // Softmax
+    softmax(S, extent[0], extent[1], extent[2], extent[4]);
+
     // End timer
 	double elapsed_time;
 	elapsed_time = (clock() - time_start)/CLOCKS_PER_SEC;
