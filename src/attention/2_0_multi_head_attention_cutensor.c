@@ -1,8 +1,8 @@
 /* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_tensor/contraction/contraction.c and 
 * and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. This however, is not 
 * considered as a "correct" implementation of Attention, as this was more of an experimentation rather than "actually 
-* coding Attention". Since cuTENSOR is not made for our purposes, we only present the "largest configuration you can run 
-* without cuTENSOR whining and throwing fit" configuration. 
+* coding Attention". Since cuTENSOR is not made for this purpose (or so we thought), we only present the "largest 
+* configuration you can run without cuTENSOR whining and throwing fit" configuration. 
 * 
 * Segmentation fault problem when assigning large sized extents from the original code has been fixed in this code.
 * 
@@ -21,6 +21,7 @@
 #include <time.h>
 #include <sys/resource.h>  		
 
+
 // Memory profiling functions
 long get_peak_memory_kb(){
 	
@@ -30,6 +31,7 @@ long get_peak_memory_kb(){
 }
 
 
+// Applies softmax over K_len (last dimension of S[B, H, Q_len, K_len])
 void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
     for(int b = 0; b < B; ++b){
         for(int h = 0; h < H; ++h){
@@ -96,7 +98,11 @@ int main()
 
     uint32_t const numThreads = 4;  // Set it to 4 first
 
-    // Contraction descriptors
+    /* Contraction descriptors
+    * We do this because we will be doing 2 (yes, 2) contraction operation and we need to redeclare everything. We decided 
+    * to have it up here so it can be bundled together and make it easier to expand
+    */
+
     nvpltensorHandle_t handle;
     nvpltensorOperationDescriptor_t desc;
     nvpltensorDataType_t scalarType;
@@ -110,10 +116,13 @@ int main()
     void* work = NULL;
 
     /**********************
-     * Computing: S[B, H, Q_len, K_len] = alpha * Q[B, H, Q_len, D] K[B, H, D, K_len] + beta * S[B, H, Q_len, K_len]
+     * Here we will be computing: 
+     * S[B, H, Q_len, K_len] = alpha * Q[B, H, Q_len, D] K[B, H, D, K_len] + beta * S[B, H, Q_len, K_len]
      * 
-     * Since creating the kernel requires one to do contraction first (literally matmul the thing), we can keep this code 
-     * but modify the shapes instead!
+     * and 
+     * 
+     * O[B, H, O_len, D] = alpha * softmax(S[B, H, Q_len, K_len]) V[B, H, V_len, D] + beta * O[B, H, O_len, D]
+     * 
      * 
      * Tensor shapes assumed:
      * Q[B, H, Q_len, D]
@@ -129,8 +138,8 @@ int main()
     int32_t modeQ[] = {0, 1, 2, 3};  // Q[B, H, Q_len, D]
     int32_t modeK[] = {0, 1, 3, 4};  // K[B, H, D, K_len]
     int32_t modeS[] = {0, 1, 2, 4};  // S[B, H, Q_len, K_len]
-    int32_t modeV[] = {0, 1, 2, 3};  // V[B, H, O_len, D]  (the same as the query because self-attention)
-    int32_t modeO[] = {0, 1, 2, 3};  // O[B, H, len, D]  (should follow the original input size with later flattened (H * D))
+    int32_t modeV[] = {0, 1, 2, 3};  // V[B, H, V_len, D]  (the same as the query because self-attention)
+    int32_t modeO[] = {0, 1, 2, 3};  // O[B, H, O_len, D]  (should follow the original input size after flattened (H * D))
 
     enum { nmodeQ = 4 };
     enum { nmodeK = 4 };
@@ -143,6 +152,8 @@ int main()
     *
     * Current assumption is D is 64 and since at the end it would be flattened (H * D), we assume dimension is 64,
     * head is 8, and the "on tensor" dimension being 8.
+    * 
+    * I forgot to code the flattening part so good luck!
     */
 
     int64_t extent[] = {1, 8, 512, 8, 512};  // [B, H, len, D, len]
@@ -183,7 +194,7 @@ int main()
     int64_t elementsQ = 1;
     for (int i = 0; i < nmodeQ; ++i)
     {
-        elementsQ *= extentQ[i];
+        elementsQ *= extentQ[i];  // Instead of extent[i], we use the already defined extents for the variables
     }
     int64_t elementsK = 1;
     for (int i = 0; i < nmodeK; ++i)
@@ -309,15 +320,11 @@ int main()
     /**************************
      * Create Contraction Plan
      **************************/
-
     HANDLE_ERROR(nvpltensorCreatePlan(handle, &plan, desc, planPref, workspaceSizeEstimate));
 
     /**************************
      * Optional: Query information about the created plan
      **************************/
-
-    // query actually used workspace
-
     HANDLE_ERROR(nvpltensorPlanGetAttribute(handle, plan, NVPLTENSOR_PLAN_REQUIRED_WORKSPACE, &actualWorkspaceSize,
                                             sizeof(actualWorkspaceSize)));
 
@@ -334,7 +341,6 @@ int main()
     /**********************
      * Execute first contraction and softmax and destroy plan and operator descriptor so we can make a new one
      **********************/
-
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, Q, K, (void*) &beta, S, S, work, actualWorkspaceSize));
     
@@ -358,14 +364,14 @@ int main()
     // We skipped the tensor descriptors since we already established one on top                           
 
     /*******************************
-     * Create Contraction Descriptor
+     * Create Contraction Descriptor (again)
      *******************************/
     HANDLE_ERROR(nvpltensorCreateContraction(handle, &desc, descS, modeS, /* unary operator A*/ NVPLTENSOR_OP_IDENTITY,
                                              descV, modeV, /* unary operator B*/ NVPLTENSOR_OP_IDENTITY, descO, modeO,
                                              /* unary operator C*/ NVPLTENSOR_OP_IDENTITY, descO, modeO, descCompute));
 
     /*****************************
-     * Optional (but recommended): ensure that the scalar type is correct.
+     * Optional (but recommended): ensure that the scalar type is correct... again
      *****************************/
     HANDLE_ERROR(nvpltensorOperationDescriptorGetAttribute(handle, desc, NVPLTENSOR_OPERATION_DESCRIPTOR_SCALAR_TYPE,
                                                            (void*) &scalarType, sizeof(scalarType)));
@@ -373,29 +379,26 @@ int main()
     assert(scalarType == NVPLTENSOR_R_32F);
 
     /**************************
-     * Set the algorithm to use
+     * Set the algorithm to use (again)
      ***************************/
     HANDLE_ERROR(nvpltensorCreatePlanPreference(handle, &planPref, algo, NVPLTENSOR_JIT_MODE_NONE));
 
     /**********************
-     * Query workspace estimate
+     * Query workspace estimate (again)
      **********************/
-    nvpltensorWorksizePreference_t const workspacePref = NVPLTENSOR_WORKSPACE_DEFAULT;
     HANDLE_ERROR(nvpltensorEstimateWorkspaceSize(handle, desc, planPref, workspacePref, &workspaceSizeEstimate));
 
     /**************************
-     * Create Contraction Plan
+     * Create Contraction Plan (again)
      **************************/
     HANDLE_ERROR(nvpltensorCreatePlan(handle, &plan, desc, planPref, workspaceSizeEstimate));
 
     /**************************
-     * Optional: Query information about the created plan
+     * Optional: Query information about the created plan (again)
      **************************/
     HANDLE_ERROR(nvpltensorPlanGetAttribute(handle, plan, NVPLTENSOR_PLAN_REQUIRED_WORKSPACE, &actualWorkspaceSize,
                                             sizeof(actualWorkspaceSize)));
 
-    // At this point the user knows exactly how much memory is need by the operation and
-    // only the smaller actual workspace needs to be allocated
     assert(actualWorkspaceSize <= workspaceSizeEstimate);
     actualWorkspaceSize += 256;
 
@@ -405,7 +408,7 @@ int main()
     }
 
     /**********************
-     * Execute first contraction and softmax and destroy plan and operator descriptor so we can make a new one
+     * Execute the second contraction
      **********************/
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, S, V, (void*) &beta, O, O, work, actualWorkspaceSize));
@@ -417,6 +420,7 @@ int main()
 
     /*************************/
 
+    // Destroy everything
     HANDLE_ERROR(nvpltensorDestroy(handle));
     HANDLE_ERROR(nvpltensorDestroyPlan(plan));
     HANDLE_ERROR(nvpltensorDestroyOperationDescriptor(desc));
@@ -425,7 +429,6 @@ int main()
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descS));
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descV));
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descO));
-
 
     if (Q)
         free(Q);
