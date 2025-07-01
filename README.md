@@ -40,6 +40,10 @@ The code does not have any other dependencies besides NVPL.
     ```bash
     nvc 1_2_heat_diffusion_dynmem_lapack.c -o foolapack -llapack
     ```
+    Since some of the files require nvplTENSOR, add ```-lnvpl_tensor``` on the compiler arguments:
+    ```bash
+    nvc 2_0_multi_head_attention_cutensor.c -o footensor -lnvpl_tensor
+    ```
 
 4.  Run the application:
     ```bash
