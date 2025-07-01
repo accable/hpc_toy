@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <nvpl_tensor.h>
 
 // Since the cluster does not have perf or gperf, we need to do this the old fashioned way
@@ -39,19 +40,19 @@ void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
 
                 // Get max
                 float max_val = s_ptr[0];
-                for (int k = 1; k < K, ++k){
+                for (int k = 1; k < K; ++k){
                     if (s_ptr[k] > max_val) max_val = s_ptr[k];
                 }
 
                 // Get exponents and sum
                 float sum = 0.0f;
-                for (int k = 0; k < K, ++k){
+                for (int k = 0; k < K; ++k){
                     s_ptr[k] = expf(s_ptr[k] - max_val);
                     sum += s_ptr[k];
                 }
 
                 // Normalize
-                for (int k = 0; k < K, ++k){
+                for (int k = 0; k < K; ++k){
                     s_ptr[k] /= sum;
                 }
             }
@@ -122,7 +123,7 @@ int main()
     enum { nmodeK = 4 };
     enum { nmodeS = 4 };
     enum { nmodeV = 4 };
-    enum { nmodeO = 3 };
+    enum { nmodeO = 4 };
 
     /* Since this is using cuTENSOR and with how things were designed, this is the maximum size we can use before
     * cuTENSOR complaining that it cannot do the operation.
@@ -203,8 +204,8 @@ int main()
     floatTypeQ* Q = aligned_alloc(kAlignment, sizeQ);
     floatTypeK* K = aligned_alloc(kAlignment, sizeK);
     floatTypeS* S = aligned_alloc(kAlignment, sizeS);
-    floatTypeV* V = aligned_alloc(kAlignment, sizeS);
-    floatTypeO* O = aligned_alloc(kAlignment, sizeS);
+    floatTypeV* V = aligned_alloc(kAlignment, sizeV);
+    floatTypeO* O = aligned_alloc(kAlignment, sizeO);
 
     if (Q == NULL || K == NULL || V == NULL)  // We only care about Q, K, and V since S and O can be empty for all we care
     {
@@ -226,7 +227,7 @@ int main()
         V[i] = (((floatTypeV) (rand() / RAND_MAX)) - 0.5) * 100;
     
     memset(S, 0, sizeof(floatTypeS) * elementsS);  
-    memset(O, 0, sizeof(floatTypeS) * elementsO);  
+    memset(O, 0, sizeof(floatTypeO) * elementsO);  
 
 
 
@@ -334,15 +335,103 @@ int main()
     }
 
     /**********************
-     * Execute
+     * Execute first contraction and softmax and destroy plan and operator descriptor so we can make a new one
      **********************/
 
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, Q, K, (void*) &beta, S, S, work, actualWorkspaceSize));
     
+    HANDLE_ERROR(nvpltensorDestroy(handle));
+    HANDLE_ERROR(nvpltensorDestroyPlan(plan));
+    HANDLE_ERROR(nvpltensorDestroyOperationDescriptor(desc));
+
     // Softmax
     softmax(S, extent[0], extent[1], extent[2], extent[4]);
 
+    /*************************
+     * Create nvplTENSOR handle (again)
+     *************************/
+
+    nvpltensorHandle_t handle;
+    HANDLE_ERROR(nvpltensorCreate(&handle));
+
+    /**********************
+     * Set numbers of threads that nvplTensor can use (again)
+     **********************/
+    HANDLE_ERROR(nvpltensorSetNumThreads(handle, numThreads));
+
+    // We skipped the tensor descriptors since we already established one on top                           
+
+    /*******************************
+     * Create Contraction Descriptor
+     *******************************/
+
+    nvpltensorOperationDescriptor_t desc;
+    HANDLE_ERROR(nvpltensorCreateContraction(handle, &desc, descS, modeS, /* unary operator A*/ NVPLTENSOR_OP_IDENTITY,
+                                             descV, modeV, /* unary operator B*/ NVPLTENSOR_OP_IDENTITY, descO, modeO,
+                                             /* unary operator C*/ NVPLTENSOR_OP_IDENTITY, descO, modeO, descCompute));
+
+    /*****************************
+     * Optional (but recommended): ensure that the scalar type is correct.
+     *****************************/
+
+    nvpltensorDataType_t scalarType;
+    HANDLE_ERROR(nvpltensorOperationDescriptorGetAttribute(handle, desc, NVPLTENSOR_OPERATION_DESCRIPTOR_SCALAR_TYPE,
+                                                           (void*) &scalarType, sizeof(scalarType)));
+
+    assert(scalarType == NVPLTENSOR_R_32F);
+
+    /**************************
+     * Set the algorithm to use
+     ***************************/
+
+    nvpltensorAlgo_t const algo = NVPLTENSOR_ALGO_DEFAULT;
+
+    nvpltensorPlanPreference_t planPref;
+    HANDLE_ERROR(nvpltensorCreatePlanPreference(handle, &planPref, algo, NVPLTENSOR_JIT_MODE_NONE));
+
+    /**********************
+     * Query workspace estimate
+     **********************/
+
+    uint64_t workspaceSizeEstimate = 0;
+    nvpltensorWorksizePreference_t const workspacePref = NVPLTENSOR_WORKSPACE_DEFAULT;
+    HANDLE_ERROR(nvpltensorEstimateWorkspaceSize(handle, desc, planPref, workspacePref, &workspaceSizeEstimate));
+
+    /**************************
+     * Create Contraction Plan
+     **************************/
+
+    nvpltensorPlan_t plan;
+    HANDLE_ERROR(nvpltensorCreatePlan(handle, &plan, desc, planPref, workspaceSizeEstimate));
+
+    /**************************
+     * Optional: Query information about the created plan
+     **************************/
+
+    // query actually used workspace
+    uint64_t actualWorkspaceSize = 0;
+    HANDLE_ERROR(nvpltensorPlanGetAttribute(handle, plan, NVPLTENSOR_PLAN_REQUIRED_WORKSPACE, &actualWorkspaceSize,
+                                            sizeof(actualWorkspaceSize)));
+
+    // At this point the user knows exactly how much memory is need by the operation and
+    // only the smaller actual workspace needs to be allocated
+    assert(actualWorkspaceSize <= workspaceSizeEstimate);
+    actualWorkspaceSize += 256;
+
+    void* work = NULL;
+    if (actualWorkspaceSize > 0)
+    {
+        work = aligned_alloc(kAlignment, actualWorkspaceSize);
+    }
+
+    /**********************
+     * Execute first contraction and softmax and destroy plan and operator descriptor so we can make a new one
+     **********************/
+
+    HANDLE_ERROR(
+        nvpltensorContract(handle, plan, (void*) &alpha, S, V, (void*) &beta, O, O, work, actualWorkspaceSize));
+    
     // End timer
 	double elapsed_time;
 	elapsed_time = (clock() - time_start)/CLOCKS_PER_SEC;
@@ -356,6 +445,9 @@ int main()
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descQ));
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descK));
     HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descS));
+    HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descV));
+    HANDLE_ERROR(nvpltensorDestroyTensorDescriptor(descO));
+
 
     if (Q)
         free(Q);
@@ -363,6 +455,10 @@ int main()
         free(K);
     if (S)
         free(S);
+    if (V)
+        free(V);
+    if (O)
+        free(O);
     if (work)
         free(work);
 
