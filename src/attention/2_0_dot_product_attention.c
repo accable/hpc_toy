@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <nvpl_tensor.h>
 
 #define HANDLE_ERROR(x)                                           \
@@ -247,8 +248,8 @@ int main()
         free(Q);
     if (K)
         free(K);
-    if (V)
-        free(V);
+    if (S)
+        free(S);
     if (work)
         free(work);
     return 0;
