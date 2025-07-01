@@ -14,6 +14,7 @@
 
 // Since the cluster does not have perf or gperf, we need to do this the old fashioned way
 #include <time.h>
+#include <sys/resource.h>  		
 
 // Memory profiling functions
 long get_peak_memory_kb(){
