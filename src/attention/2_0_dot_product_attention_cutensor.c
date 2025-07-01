@@ -96,6 +96,19 @@ int main()
 
     uint32_t const numThreads = 4;  // Set it to 4 first
 
+    // Contraction descriptors
+    nvpltensorHandle_t handle;
+    nvpltensorOperationDescriptor_t desc;
+    nvpltensorDataType_t scalarType;
+    nvpltensorAlgo_t const algo = NVPLTENSOR_ALGO_DEFAULT;
+    nvpltensorPlanPreference_t planPref;
+
+    uint64_t workspaceSizeEstimate = 0;
+    nvpltensorWorksizePreference_t const workspacePref = NVPLTENSOR_WORKSPACE_DEFAULT;
+    nvpltensorPlan_t plan;
+    uint64_t actualWorkspaceSize = 0;
+    void* work = NULL;
+
     /**********************
      * Computing: S[B, H, Q_len, K_len] = alpha * Q[B, H, Q_len, D] K[B, H, D, K_len] + beta * S[B, H, Q_len, K_len]
      * 
@@ -238,8 +251,6 @@ int main()
     /*************************
      * Create nvplTENSOR handle
      *************************/
-
-    nvpltensorHandle_t handle;
     HANDLE_ERROR(nvpltensorCreate(&handle));
 
     /**********************
@@ -250,7 +261,6 @@ int main()
     /**********************
      * Create Tensor Descriptors
      **********************/
-
     nvpltensorTensorDescriptor_t descQ;
     HANDLE_ERROR(nvpltensorCreateTensorDescriptor(handle, &descQ, nmodeQ, extentQ, NULL, /*stride*/
                                                   typeQ, kAlignment));
@@ -274,8 +284,6 @@ int main()
     /*******************************
      * Create Contraction Descriptor
      *******************************/
-
-    nvpltensorOperationDescriptor_t desc;
     HANDLE_ERROR(nvpltensorCreateContraction(handle, &desc, descQ, modeQ, /* unary operator A*/ NVPLTENSOR_OP_IDENTITY,
                                              descK, modeK, /* unary operator B*/ NVPLTENSOR_OP_IDENTITY, descS, modeS,
                                              /* unary operator C*/ NVPLTENSOR_OP_IDENTITY, descS, modeS, descCompute));
@@ -283,8 +291,6 @@ int main()
     /*****************************
      * Optional (but recommended): ensure that the scalar type is correct.
      *****************************/
-
-    nvpltensorDataType_t scalarType;
     HANDLE_ERROR(nvpltensorOperationDescriptorGetAttribute(handle, desc, NVPLTENSOR_OPERATION_DESCRIPTOR_SCALAR_TYPE,
                                                            (void*) &scalarType, sizeof(scalarType)));
 
@@ -293,25 +299,17 @@ int main()
     /**************************
      * Set the algorithm to use
      ***************************/
-
-    nvpltensorAlgo_t const algo = NVPLTENSOR_ALGO_DEFAULT;
-
-    nvpltensorPlanPreference_t planPref;
     HANDLE_ERROR(nvpltensorCreatePlanPreference(handle, &planPref, algo, NVPLTENSOR_JIT_MODE_NONE));
 
     /**********************
      * Query workspace estimate
      **********************/
-
-    uint64_t workspaceSizeEstimate = 0;
-    nvpltensorWorksizePreference_t const workspacePref = NVPLTENSOR_WORKSPACE_DEFAULT;
     HANDLE_ERROR(nvpltensorEstimateWorkspaceSize(handle, desc, planPref, workspacePref, &workspaceSizeEstimate));
 
     /**************************
      * Create Contraction Plan
      **************************/
 
-    nvpltensorPlan_t plan;
     HANDLE_ERROR(nvpltensorCreatePlan(handle, &plan, desc, planPref, workspaceSizeEstimate));
 
     /**************************
@@ -319,7 +317,7 @@ int main()
      **************************/
 
     // query actually used workspace
-    uint64_t actualWorkspaceSize = 0;
+
     HANDLE_ERROR(nvpltensorPlanGetAttribute(handle, plan, NVPLTENSOR_PLAN_REQUIRED_WORKSPACE, &actualWorkspaceSize,
                                             sizeof(actualWorkspaceSize)));
 
@@ -328,7 +326,6 @@ int main()
     assert(actualWorkspaceSize <= workspaceSizeEstimate);
     actualWorkspaceSize += 256;
 
-    void* work = NULL;
     if (actualWorkspaceSize > 0)
     {
         work = aligned_alloc(kAlignment, actualWorkspaceSize);
@@ -351,8 +348,6 @@ int main()
     /*************************
      * Create nvplTENSOR handle (again)
      *************************/
-
-    nvpltensorHandle_t handle;
     HANDLE_ERROR(nvpltensorCreate(&handle));
 
     /**********************
@@ -365,8 +360,6 @@ int main()
     /*******************************
      * Create Contraction Descriptor
      *******************************/
-
-    nvpltensorOperationDescriptor_t desc;
     HANDLE_ERROR(nvpltensorCreateContraction(handle, &desc, descS, modeS, /* unary operator A*/ NVPLTENSOR_OP_IDENTITY,
                                              descV, modeV, /* unary operator B*/ NVPLTENSOR_OP_IDENTITY, descO, modeO,
                                              /* unary operator C*/ NVPLTENSOR_OP_IDENTITY, descO, modeO, descCompute));
@@ -374,8 +367,6 @@ int main()
     /*****************************
      * Optional (but recommended): ensure that the scalar type is correct.
      *****************************/
-
-    nvpltensorDataType_t scalarType;
     HANDLE_ERROR(nvpltensorOperationDescriptorGetAttribute(handle, desc, NVPLTENSOR_OPERATION_DESCRIPTOR_SCALAR_TYPE,
                                                            (void*) &scalarType, sizeof(scalarType)));
 
@@ -384,33 +375,22 @@ int main()
     /**************************
      * Set the algorithm to use
      ***************************/
-
-    nvpltensorAlgo_t const algo = NVPLTENSOR_ALGO_DEFAULT;
-
-    nvpltensorPlanPreference_t planPref;
     HANDLE_ERROR(nvpltensorCreatePlanPreference(handle, &planPref, algo, NVPLTENSOR_JIT_MODE_NONE));
 
     /**********************
      * Query workspace estimate
      **********************/
-
-    uint64_t workspaceSizeEstimate = 0;
     nvpltensorWorksizePreference_t const workspacePref = NVPLTENSOR_WORKSPACE_DEFAULT;
     HANDLE_ERROR(nvpltensorEstimateWorkspaceSize(handle, desc, planPref, workspacePref, &workspaceSizeEstimate));
 
     /**************************
      * Create Contraction Plan
      **************************/
-
-    nvpltensorPlan_t plan;
     HANDLE_ERROR(nvpltensorCreatePlan(handle, &plan, desc, planPref, workspaceSizeEstimate));
 
     /**************************
      * Optional: Query information about the created plan
      **************************/
-
-    // query actually used workspace
-    uint64_t actualWorkspaceSize = 0;
     HANDLE_ERROR(nvpltensorPlanGetAttribute(handle, plan, NVPLTENSOR_PLAN_REQUIRED_WORKSPACE, &actualWorkspaceSize,
                                             sizeof(actualWorkspaceSize)));
 
@@ -419,7 +399,6 @@ int main()
     assert(actualWorkspaceSize <= workspaceSizeEstimate);
     actualWorkspaceSize += 256;
 
-    void* work = NULL;
     if (actualWorkspaceSize > 0)
     {
         work = aligned_alloc(kAlignment, actualWorkspaceSize);
@@ -428,7 +407,6 @@ int main()
     /**********************
      * Execute first contraction and softmax and destroy plan and operator descriptor so we can make a new one
      **********************/
-
     HANDLE_ERROR(
         nvpltensorContract(handle, plan, (void*) &alpha, S, V, (void*) &beta, O, O, work, actualWorkspaceSize));
     
