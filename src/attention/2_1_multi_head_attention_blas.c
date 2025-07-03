@@ -1,5 +1,5 @@
 /* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/dgemm_batch_strided.c and 
- * and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
+ * modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
  * implementation at 2_0_multi_head_attention_cutensor.c, we do it right by using BLAS libraries to do the 
  * matrix multiplication for us. 
  * 
