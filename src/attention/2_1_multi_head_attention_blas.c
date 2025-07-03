@@ -178,13 +178,16 @@ int main()
 
     nvpl_int_t q_len = 1024;  // Number of rows for Q and S (1024)
     nvpl_int_t k_len = 1024;  // Number of columns for K and S (1024)
+    nvpl_int_t v_len = 1024;  // Because V should follow how Q was defined
     nvpl_int_t D = 64;  // Number of shared dimension (64)
 
     // Leading dimensions
     // So we can do tensor transformations (row/column major) without explicitly doing so (we let BLAS do it)
-    nvpl_int_t ldq = 64;  // Because we wanted the data to be set as row-major
-    nvpl_int_t ldk = 1024;   // Column major  
-    nvpl_int_t lds = 64;   // Row-major, since the final tensor would be S[B, H, Q_len, K_len]
+    nvpl_int_t ldq = 64;  // Because we wanted the data to be set as row-major [1024 * 64]
+    nvpl_int_t ldk = 1024;   // Column major [64 * 1024]
+    nvpl_int_t lds = 1024;   // Row-major, since the final tensor would be S[B, H, Q_len, K_len] and [1024 * 1024]
+    nvpl_int_t ldv = 64;  // Follows Q
+    nvpl_int_t ldo = 64;  // Follows Q (since the output is the original tensor)
     nvpl_int_t batch_size = 3;  // We set the batch size w.r.t heads so 3
 
     // Blas variables
@@ -198,15 +201,26 @@ int main()
     double * Q = NULL;
     double * K = NULL;
     double * S = NULL;
+    double * V = NULL;
+    double * O = NULL;
     int64_t matrixSizeQ = 0;
     int64_t matrixSizeK = 0;
     int64_t matrixSizeS = 0;
+    int64_t matrixSizeV = 0;
+    int64_t matrixSizeO = 0;
 
     // Setting shape from tanspose conditions (if transpose x, else y)
     nvpl_int_t rowsQ = (transA == CblasNoTrans) ? q_len : k_len;
     nvpl_int_t colsQ = (transA == CblasNoTrans) ? k_len : q_len;
     nvpl_int_t rowsK = (transB == CblasNoTrans) ? k_len : D;
     nvpl_int_t colsK = (transB == CblasNoTrans) ? D : k_len;
+
+    // We keep it as is since V follows Q and O should follow Q
+    nvpl_int_t rowsV = (transA == CblasNoTrans) ? v_len : k_len;
+    nvpl_int_t colsV = (transA == CblasNoTrans) ? k_len : v_len;
+    nvpl_int_t rowsO = (transA == CblasNoTrans) ? v_len : k_len;
+    nvpl_int_t colsO = (transA == CblasNoTrans) ? k_len : v_len;
+    
     nvpl_int_t rowsS = q_len;
     nvpl_int_t colsS = k_len;
 
@@ -214,25 +228,41 @@ int main()
     matrixSizeQ = (int64_t)ldq * colsQ;
     matrixSizeK = (int64_t)ldk * colsK;
     matrixSizeS = (int64_t)lds * colsS;
+    matrixSizeV = (int64_t)ldv * colsV;
+    matrixSizeO = (int64_t)ldo * colsO;
+
     nvpl_int_t strideQ = matrixSizeQ;
     nvpl_int_t strideK = matrixSizeK;
     nvpl_int_t strideS = matrixSizeS;
+    nvpl_int_t strideV = matrixSizeV;
+    nvpl_int_t strideO = matrixSizeO;
 
     // Allocating memory
     Q = (double *)malloc((strideQ * (int64_t)batch_size) * sizeof(double));
     K = (double *)malloc((strideK * (int64_t)batch_size) * sizeof(double));
     S = (double *)malloc((strideS * (int64_t)batch_size) * sizeof(double));
+    V = (double *)malloc((strideV * (int64_t)batch_size) * sizeof(double));
+    O = (double *)malloc((strideO * (int64_t)batch_size) * sizeof(double));
 
     // Assigning data
     for (nvpl_int_t i = 0; i < batch_size; ++i) {
         fill_dmatrix(Q + strideQ * i, rowsQ, colsQ, ldq, order, Full, CblasNonUnit);
         fill_dmatrix(K + strideK * i, rowsK, colsK, ldk, order, Full, CblasNonUnit);
         fill_dmatrix(S + strideS * i, rowsS, colsS, lds, order, Full, CblasNonUnit);
+        fill_dmatrix(V + strideS * i, rowsV, colsV, ldv, order, Full, CblasNonUnit);
+        fill_dmatrix(O + strideS * i, rowsO, colsO, ldo, order, Full, CblasNonUnit);
     }
 
     // Call cgemm_batch_strided and end timer
     cblas_dgemm_batch_strided(order, transA, transB, q_len, k_len, D, alpha, Q, ldq, strideQ,
             K, ldk, strideK, beta, S, lds, strideS, batch_size);
+
+    // Call softmax
+    softmax(S, batch_size, q_len, D, k_len);
+
+    // Do another ccgemm_batch_strided for the final result
+    cblas_dgemm_batch_strided(order, transA, transB, q_len, D, k_len, alpha, S, lds, strideS,
+            V, ldv, strideV, beta, O, ldo, strideO, batch_size);
 
     // End timer
 	double elapsed_time;
@@ -251,5 +281,7 @@ int main()
     free(Q);
     free(K);
     free(S);
+    free(V);
+    free(O);
     return 0;
 }
