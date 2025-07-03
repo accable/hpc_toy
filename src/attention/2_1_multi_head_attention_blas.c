@@ -1,10 +1,13 @@
 /* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/dgemm_batch_strided.c and 
- * modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
+ * modified to accomodate scaled* dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
  * implementation at 2_0_multi_head_attention_cutensor.c, we do it right by using BLAS libraries to do the 
  * matrix multiplication for us. 
  * 
  * Same with the previous code, scaled dot product Attention requires Q, K^t, and V values, we need to also declare 
  * the intermediate values too (i.e., S = Q * K^t, the attention kernel), and the output O.
+ * 
+ * 
+ * *i forgot to code the scaling part
  */
 
 #include <stdio.h>
