@@ -1,7 +1,7 @@
 /* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/dgemm_batch_strided.c and 
  * and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
  * implementation at 2_0_multi_head_attention_cutensor.c, we do it right by using BLAS libraries to do the 
- * matrix multiplication for us.
+ * matrix multiplication for us. 
  * 
  * Same with the previous code, scaled dot product Attention requires Q, K^t, and V values, we need to also declare 
  * the intermediate values too (i.e., S = Q * K^t, the attention kernel), and the output O.
@@ -165,7 +165,6 @@ int main()
      * 
      * O[B, H, O_len, D] = alpha * softmax(S[B, H, Q_len, K_len]) V[B, H, V_len, D] + beta * O[B, H, O_len, D]
      * 
-     * 
      * Tensor shapes assumed:
      * Q[B, H, Q_len, D]
      * K[B, H, D, K_len] (transposed because matmul)
@@ -181,13 +180,14 @@ int main()
     nvpl_int_t v_len = 1024;  // Because V should follow how Q was defined
     nvpl_int_t D = 64;  // Number of shared dimension (64)
 
-    // Leading dimensions
-    // So we can do tensor transformations (row/column major) without explicitly doing so (we let BLAS do it)
-    nvpl_int_t ldq = 64;  // Because we wanted the data to be set as row-major [1024 * 64]
-    nvpl_int_t ldk = 1024;   // Column major [64 * 1024]
-    nvpl_int_t lds = 1024;   // Row-major, since the final tensor would be S[B, H, Q_len, K_len] and [1024 * 1024]
-    nvpl_int_t ldv = 64;  // Follows Q
+    // Leading dimensions for BLAS
+    nvpl_int_t ldq = 64;  // [1024 x 64]
+    nvpl_int_t ldk = 1024;   // [64 * 1024]
+    nvpl_int_t lds = 1024;   // [1024 x 1024]
+    nvpl_int_t ldv = 64;  // Follows Q (because self attention)
     nvpl_int_t ldo = 64;  // Follows Q (since the output is the original tensor)
+    
+    // Batching
     nvpl_int_t batch = 1;
     nvpl_int_t num_heads = 3;
     nvpl_int_t batch_size = batch * num_heads;  // We set the batch size w.r.t heads so 3
@@ -205,6 +205,7 @@ int main()
     double * S = NULL;
     double * V = NULL;
     double * O = NULL;
+
     int64_t matrixSizeQ = 0;
     int64_t matrixSizeK = 0;
     int64_t matrixSizeS = 0;
@@ -217,7 +218,7 @@ int main()
     nvpl_int_t rowsK = (transB == CblasNoTrans) ? k_len : D;
     nvpl_int_t colsK = (transB == CblasNoTrans) ? D : k_len;
 
-    // We keep it as is since V follows Q and O should follow Q
+    // We keep it as is since V and O shoul follow Q
     nvpl_int_t rowsV = (transA == CblasNoTrans) ? v_len : k_len;
     nvpl_int_t colsV = (transA == CblasNoTrans) ? k_len : v_len;
     nvpl_int_t rowsO = (transA == CblasNoTrans) ? v_len : k_len;
