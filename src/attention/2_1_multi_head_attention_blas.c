@@ -1,4 +1,4 @@
-/* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/cgemm_batch_strided.c and 
+/* This code was taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/dgemm_batch_strided.c and 
  * and modified to accomodate scaled dot product Attention proposed by Vaswani et al., 2017. Unlike the cuTENSOR 
  * implementation at 2_0_multi_head_attention_cutensor.c, we do it right by using BLAS libraries to do the 
  * matrix multiplication for us.
@@ -59,10 +59,15 @@ void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
 }
 
 
+// For the matrix filling loop
+enum FILL_MODE {Full=120, Upper=121, Lower=122};
+#define UPLO_TO_FILL_MODE(uplo) ((CblasUpper == uplo) ? Upper : Lower)
+
+
 /**
  * Taken from: https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/example_helper.h
  * 
- * \brief      Fill data for single precision matrix
+ * \brief      Fill data for double precision matrix
  *
  * \param      A        The pointer of the matrix
  * \param[in]  rows     The rows of the matrix
@@ -72,20 +77,20 @@ void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
  * \param[in]  fillMode Matrix lower or upper or all the part is stored
  * \param[in]  diag     Indicates if the elements on the main diagonal of matrix are unity and should not be accessed
  */
-static void fill_smatrix(float * A, nvpl_int_t rows, nvpl_int_t cols, nvpl_int_t ld, enum CBLAS_ORDER order,
+static void fill_dmatrix(double * A, nvpl_int_t rows, nvpl_int_t cols, nvpl_int_t ld, enum CBLAS_ORDER order,
         enum FILL_MODE fillMode, enum CBLAS_DIAG diag) {
     if (CblasColMajor == order) {
         if (Full == fillMode) {
             for (nvpl_int_t j = 0; j < cols; ++j) {
                 for (nvpl_int_t i = 0; i < rows; ++i) {
-                    A[i + ld * j] = (float)((float)1/1024.f * ((91u + j) & 1023u) - 0.5f);
+                    A[i + ld * j] = (double)((double)1/1024.f * ((91u + j) & 1023u) - 0.5f);
                 }
             }
         } else {
             for (nvpl_int_t j = 0; j < cols; ++j) {
                 for (nvpl_int_t i = 0; i < rows; ++i) {
                     if (((Lower == fillMode) ? (j < i) : (j > i)) || ((CblasNonUnit == diag) && (i == j))) {
-                        A[i + ld * j] = (float)((float)1/1024.f * ((91u + j) & 1023u) - 0.5f);
+                        A[i + ld * j] = (double)((double)1/1024.f * ((91u + j) & 1023u) - 0.5f);
                     } else if (i == j) {
                         A[i + ld * j] = 1.0f;
                     } else {
@@ -98,14 +103,14 @@ static void fill_smatrix(float * A, nvpl_int_t rows, nvpl_int_t cols, nvpl_int_t
         if (Full == fillMode) {
             for (nvpl_int_t i = 0; i < rows; ++i) {
                 for (nvpl_int_t j = 0; j < cols; ++j) {
-                    A[j + ld * i] = (float)((float)1/1024.f * ((91u + i) & 1023u) - 0.5f);
+                    A[j + ld * i] = (double)((double)1/1024.f * ((91u + i) & 1023u) - 0.5f);
                 }
             }
         } else {
             for (nvpl_int_t i = 0; i < rows; ++i) {
                 for (nvpl_int_t j = 0; j < cols; ++j) {
                     if (((Lower == fillMode) ? (j < i) : (j > i)) || ((CblasNonUnit == diag) && (i == j))) {
-                        A[j + ld * i] = (float)((float)1/1024.f * ((91u + i) & 1023u) - 0.5f);
+                        A[j + ld * i] = (double)((double)1/1024.f * ((91u + i) & 1023u) - 0.5f);
                     } else if (i == j) {
                         A[j + ld * i] = 1.0f;
                     } else {
@@ -115,6 +120,32 @@ static void fill_smatrix(float * A, nvpl_int_t rows, nvpl_int_t cols, nvpl_int_t
             }
         }
     }
+}
+
+
+// Also taken from https://github.com/NVIDIA/NVPLSamples/blob/main/nvpl_blas/c/example_helper.h
+static char transpose_to_char(enum CBLAS_TRANSPOSE op) {
+  switch (op) {
+    case CblasTrans:
+      return 'T';
+    case CblasConjTrans:
+      return 'C';
+    case CblasNoTrans:
+      return 'N';
+    default:
+      return 'T';
+  }
+}
+
+static char order_to_char(enum CBLAS_ORDER op) {
+  switch (op) {
+    case CblasRowMajor:
+      return 'R';
+    case CblasColMajor:
+      return 'C';
+    default:
+      return 'C';
+  }
 }
 
 
@@ -154,20 +185,19 @@ int main()
     nvpl_int_t ldq = 64;  // Because we wanted the data to be set as row-major
     nvpl_int_t ldk = 1024;   // Column major  
     nvpl_int_t lds = 64;   // Row-major, since the final tensor would be S[B, H, Q_len, K_len]
-
-    nvpl_scomplex_t alpha = {1.0f, 1.0f};  // Set to 1
-    nvpl_scomplex_t beta = {0.0f, 0.0f};  // And set to 0
     nvpl_int_t batch_size = 3;  // We set the batch size w.r.t heads so 3
 
     // Blas variables
     enum CBLAS_ORDER order = CblasRowMajor;  // Assumed to be row-major
     enum CBLAS_TRANSPOSE transA = CblasNoTrans;  
     enum CBLAS_TRANSPOSE transB = CblasNoTrans;  // No transpose because we already assumed K is transposed above
+    double alpha = 1.0f;
+    double beta = 0.0f;
 
     // Memory pointers and size init
-    float * Q = NULL;
-    float * K = NULL;
-    float * S = NULL;
+    double * Q = NULL;
+    double * K = NULL;
+    double * S = NULL;
     int64_t matrixSizeQ = 0;
     int64_t matrixSizeK = 0;
     int64_t matrixSizeS = 0;
@@ -188,29 +218,21 @@ int main()
     nvpl_int_t strideK = matrixSizeK;
     nvpl_int_t strideS = matrixSizeS;
 
-    printf("\nExample: cblas_cgemm_batch_strided for the matrix-matrix multiplication of a batch of matrices\n\n");
-    printf("#### args: q_len=%" PRId64 ", k_len=%" PRId64 ", d=%" PRId64 ", ldq=%" PRId64 ", ldk=%" PRId64 ", lds=%" PRId64 ", "
-            "transA=%c, transB=%c, order=%c\n", (int64_t)q_len, (int64_t)k_len, (int64_t)D, (int64_t)ldq, (int64_t)ldk,
-            (int64_t)lds, transpose_to_char(transA), transpose_to_char(transB), order_to_char(order));
-    printf("           strideQ=%" PRId64 ", strideK=%" PRId64 ", strideS=%" PRId64 ", batch_size=%" PRId64 "\n",
-            (int64_t)strideQ, (int64_t)strideK, (int64_t)strideS, (int64_t)batch_size);
-    printf("           alpha=(%g, %g), beta=(%g, %g)\n", alpha.real, alpha.imag, beta.real, beta.imag);
-
     // Allocating memory
-    Q = (nvpl_scomplex_t *)malloc((strideQ * (int64_t)batch_size) * sizeof(nvpl_scomplex_t));
-    K = (nvpl_scomplex_t *)malloc((strideK * (int64_t)batch_size) * sizeof(nvpl_scomplex_t));
-    S = (nvpl_scomplex_t *)malloc((strideS * (int64_t)batch_size) * sizeof(nvpl_scomplex_t));
+    Q = (double *)malloc((strideQ * (int64_t)batch_size) * sizeof(double));
+    K = (double *)malloc((strideK * (int64_t)batch_size) * sizeof(double));
+    S = (double *)malloc((strideS * (int64_t)batch_size) * sizeof(double));
 
     // Assigning data
     for (nvpl_int_t i = 0; i < batch_size; ++i) {
-        fill_smatrix(Q + strideQ * i, rowsQ, colsQ, ldq, order, Full, CblasNonUnit);
-        fill_smatrix(K + strideK * i, rowsK, colsK, ldk, order, Full, CblasNonUnit);
-        fill_smatrix(S + strideS * i, rowsS, colsS, lds, order, Full, CblasNonUnit);
+        fill_dmatrix(Q + strideQ * i, rowsQ, colsQ, ldq, order, Full, CblasNonUnit);
+        fill_dmatrix(K + strideK * i, rowsK, colsK, ldk, order, Full, CblasNonUnit);
+        fill_dmatrix(S + strideS * i, rowsS, colsS, lds, order, Full, CblasNonUnit);
     }
 
     // Call cgemm_batch_strided and end timer
-    cblas_sgemm_batch_strided(order, transA, transB, q_len, k_len, D, &alpha, Q, ldq, strideQ,
-            K, ldk, strideK, &beta, S, lds, strideS, batch_size);
+    cblas_dgemm_batch_strided(order, transA, transB, q_len, k_len, D, alpha, Q, ldq, strideQ,
+            K, ldk, strideK, beta, S, lds, strideS, batch_size);
 
     // End timer
 	double elapsed_time;
