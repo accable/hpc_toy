@@ -28,16 +28,16 @@ long get_peak_memory_kb(){
 
 
 // Applies softmax over K_len (last dimension of S[B, H, Q_len, K_len])
-void softmax(float* S, int32_t B, int32_t H, int32_t Q, int32_t K){
+void softmax(double* S, int32_t B, int32_t H, int32_t Q, int32_t K){
     for(int b = 0; b < B; ++b){
         for(int h = 0; h < H; ++h){
             for(int q = 0; q < Q; ++q){
                 
                 // Get the pointer (we assume everything is 1D now)
-                float* s_ptr = S + (((b * H + h) * Q + q) * K);
+                double* s_ptr = S + (((b * H + h) * Q + q) * K);
 
                 // Get max
-                float max_val = s_ptr[0];
+                double max_val = s_ptr[0];
                 for (int k = 1; k < K; ++k){
                     if (s_ptr[k] > max_val) max_val = s_ptr[k];
                 }
@@ -188,7 +188,9 @@ int main()
     nvpl_int_t lds = 1024;   // Row-major, since the final tensor would be S[B, H, Q_len, K_len] and [1024 * 1024]
     nvpl_int_t ldv = 64;  // Follows Q
     nvpl_int_t ldo = 64;  // Follows Q (since the output is the original tensor)
-    nvpl_int_t batch_size = 3;  // We set the batch size w.r.t heads so 3
+    nvpl_int_t batch = 1;
+    nvpl_int_t num_heads = 3;
+    nvpl_int_t batch_size = batch * num_heads;  // We set the batch size w.r.t heads so 3
 
     // Blas variables
     enum CBLAS_ORDER order = CblasRowMajor;  // Assumed to be row-major
@@ -249,8 +251,8 @@ int main()
         fill_dmatrix(Q + strideQ * i, rowsQ, colsQ, ldq, order, Full, CblasNonUnit);
         fill_dmatrix(K + strideK * i, rowsK, colsK, ldk, order, Full, CblasNonUnit);
         fill_dmatrix(S + strideS * i, rowsS, colsS, lds, order, Full, CblasNonUnit);
-        fill_dmatrix(V + strideS * i, rowsV, colsV, ldv, order, Full, CblasNonUnit);
-        fill_dmatrix(O + strideS * i, rowsO, colsO, ldo, order, Full, CblasNonUnit);
+        fill_dmatrix(V + strideV * i, rowsV, colsV, ldv, order, Full, CblasNonUnit);
+        fill_dmatrix(O + strideO * i, rowsO, colsO, ldo, order, Full, CblasNonUnit);
     }
 
     // Call cgemm_batch_strided and end timer
@@ -258,7 +260,7 @@ int main()
             K, ldk, strideK, beta, S, lds, strideS, batch_size);
 
     // Call softmax
-    softmax(S, batch_size, q_len, D, k_len);
+    softmax(S, batch, num_heads, q_len, k_len);
 
     // Do another ccgemm_batch_strided for the final result
     cblas_dgemm_batch_strided(order, transA, transB, q_len, D, k_len, alpha, S, lds, strideS,
