@@ -44,6 +44,10 @@ The code does not have any other dependencies besides NVPL.
     ```bash
     nvc 2_0_multi_head_attention_cutensor.c -o footensor -lnvpl_tensor
     ```
+    Some of the files also require specific way of compiling, add ```-Mnvpl``` on the compiler arguments:
+    ```bash
+    nvc 2_1_multi_head_attention_blas.c -o fooblas -Mnvpl=blas
+    ```
 
 4.  Run the application:
     ```bash
